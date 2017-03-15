@@ -1,4 +1,4 @@
- from __future__ import absolute_import
+from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
@@ -9,9 +9,11 @@ import numpy as np
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
-from tensorflow.python.ops.nn import bidirectional_dynamic_rnn, dynamic_rnn
 
 from evaluate import exact_match_score, f1_score
+
+from tensorflow.python.ops.nn import birectional_dynamic_rnn
+from tensorflow.contrib import rnn
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,9 +29,11 @@ def get_optimizer(opt):
 
 
 class Encoder(object):
-    def __init__(self, size, vocab_dim):
+    def __init__(self, size, vocab_dim, qlen, c_len):
         self.size = size
         self.vocab_dim = vocab_dim
+        self.max_question_length = q_len
+        self.max_context_length = c_len
 
     def encode(self, inputs, masks, encoder_state_input):
         """
@@ -46,15 +50,42 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
-        cell = tf.nn.rnn_cell.LSTMCell(1)
-        (fw_out, bw_out), _ = bidirectional_dynamic_rnn(cell, 
-                                                        cell,
-                                                        inp,
-                                                        srclen,
-                                                        scope=scope, 
-                                                        time_major=True, 
-                                                        dtype=dtypes.float32)
+        cell_fw = rnn.LSTMCell(self.size)
+        cell_bw = rnn.LSTMCell(self.size)
+        outputs, output_states = bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs, sequence_length=[self.max_question_length] * FLAGS.batch_size)
+
+        question_rep = tf.concat(output_states, 0)
         return
+
+    # TODO
+    def add_placeholders(self):
+        self.question_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_question_length), name="questions")
+        self.question_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_question_length), name="question_masks")
+
+        self.context_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_context_length), name="contexts")
+        self.context_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_context_length), name="context_masks")
+
+        # self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name="dropout")
+    
+    # TODO
+    def create_feed_dict(self, q_inputs_batch=None, q_mask_batch=None, c_inputs_batch=None, c_mask_batch=None, labels_batch=None, dropout=1):
+        feed_dict = {}
+        if q_inputs_batch != None: 
+            feed_dict[self.question_input_placeholder] = q_inputs_batch
+        if q_mask_batch != None: 
+            feed_dict[self.question_masks_placeholder] = q_mask_batch
+        if c_inputs_batch != None: 
+            feed_dict[self.context_input_placeholder] = c_inputs_batch
+        if c_mask_batch != None: 
+            feed_dict[self.context_masks_placeholder] = c_mask_batch
+        if labels_batch != None: 
+            feed_dict[self.labels_placeholder] = labels_batch
+        if dropout != None: 
+            feed_dict[self.dropout_placeholder] = dropout
+        
+        return feed_dict
+
+    
 
 
 class Decoder(object):
@@ -73,7 +104,7 @@ class Decoder(object):
                               decided by how you choose to implement the encoder
         :return:
         """
-        
+
         return
 
 class QASystem(object):
@@ -87,12 +118,11 @@ class QASystem(object):
         """
 
         # ==== set up placeholder tokens ========
-        self.inputs_placeholder = tf.placeholder(tf.float32, shape=(None, FLAGS.max_length), name="x")
-        self.labels_placeholder = tf.placeholder(tf.float32, shape=(None, 1), name="y")
+
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
-            self.setup_embeddings()
+            self.setup_embeddings(embeddings)
             self.setup_system()
             self.setup_loss()
 
@@ -118,13 +148,14 @@ class QASystem(object):
         with vs.variable_scope("loss"):
             pass
 
+    # TODO
     def setup_embeddings(self):
         """
         Loads distributed word representations based on placeholder tokens
         :return:
         """
         with vs.variable_scope("embeddings"):
-            pass
+            L = tf.Variable(self.pretrained_embeddings, name="L")
 
     def optimize(self, session, train_x, train_y):
         """
@@ -265,32 +296,3 @@ class QASystem(object):
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
-
-        # def train_on_batch(self, sess, inputs_batch, labels_batch):
-        # """Perform one step of gradient descent on the provided batch of data.
-        # This version also returns the norm of gradients.
-        # """
-        # feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch)
-        # _, loss, grad_norm = sess.run([self.train_op, self.loss, self.grad_norm], feed_dict=feed)
-        # return loss, grad_norm
-
-        # def run_epoch(self, sess, train):
-        # prog = Progbar(target=1 + int(len(train) / self.config.batch_size))
-        # losses, grad_norms = [], []
-        # for i, batch in enumerate(minibatches(train, self.config.batch_size)):
-        #     loss, grad_norm = self.train_on_batch(sess, *batch)
-        #     losses.append(loss)
-        #     grad_norms.append(grad_norm)
-        #     prog.update(i + 1, [("train loss", loss)])
-
-        # return losses, grad_norms
-
-        # def fit(self, sess, train):
-        # losses, grad_norms = [], []
-        # for epoch in range(self.config.n_epochs):
-        #     logger.info("Epoch %d out of %d", epoch + 1, self.config.n_epochs)
-        #     loss, grad_norm = self.run_epoch(sess, train)
-        #     losses.append(loss)
-        #     grad_norms.append(grad_norm)
-
-        # return losses, grad_norms

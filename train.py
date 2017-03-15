@@ -7,8 +7,11 @@ import json
 
 import tensorflow as tf
 
+import numpy as np
+
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
+
 
 import logging
 
@@ -31,6 +34,9 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+
+tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
+tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -75,20 +81,78 @@ def get_normalized_train_dir(train_dir):
     os.symlink(os.path.abspath(train_dir), global_train_dir)
     return global_train_dir
 
+def get_array_from_file(filename):
+    all_arrays = []   
+    with open(filename) as f:
+        for line in f:
+            all_arrays.append(line.strip().split())
+    return all_arrays
+
+def combine_data(questions, contexts, spans):
+    combined = []
+    for i in range(len(questions)):
+        combined.append( ((questions[i], contexts[i]), spans[i]) )
+    return combined
+
+def pad_sequences(data, max_length):
+    ret = []
+
+    for sentence in data:
+        ### YOUR CODE HERE (~4-6 lines)
+        sentence_len = len(sentence)
+        if sentence_len >= max_length:
+            ret.append((sentence[:max_length], [True] * max_length))
+        else:
+            p_len = max_length - sentence_len
+            new_sentence = sentence + [0] * p_len
+            masking = [True] * sentence_len + [False] * p_len
+            ret.append((new_sentence, masking))
+        ### END YOUR CODE ###
+    return ret
+
+def load_data(data_type):
+    file_prefix = data_type
+    questions = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".ids.question"))
+    contexts = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".ids.context"))
+    spans = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".span"))
+
+    questions = pad_sequences(questions, FLAGS.max_question_length)
+    contexts = pad_sequences(contexts, FLAGS.max_context_length)
+
+    return {"q": questions, "c": contexts, "s": spans} 
+
+
+def load_and_preprocess_data():
+    logger.info("Loading training data...")
+    train_data = load_data('train')
+    logger.info("Done. Read %d sentences", len(train_data['q']))
+
+    logger.info("Loading dev data...")
+    dev_data = load_data('dev')
+    logger.info("Done. Read %d sentences", len(dev_dat['q']))
+
+    # now process all the input data.
+    
+    return train_data, dev_data
 
 def main(_):
 
     # Do what you need to load datasets from FLAGS.data_dir
+    
+
     dataset = None
 
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
 
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
+    pretrained_embeddings = np.load(embed_path)['glove']
+    train_data, dev_data = load_and_preprocess_data()
+
+    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, q_len=FLAGS.max_question_length, c_len=FLAGS.max_context_length)
     decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem(encoder, decoder)
+    qa = QASystem(encoder, decoder, embeddings=pretrained_embeddings)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
