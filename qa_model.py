@@ -15,6 +15,8 @@ from evaluate import exact_match_score, f1_score
 from tensorflow.python.ops.nn import birectional_dynamic_rnn
 from tensorflow.contrib import rnn
 
+from util import Progbar, minibatches
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -50,43 +52,39 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
+        questions, contexts = inputs
+        q_mask, c_mask = masks
+
         cell_fw = rnn.LSTMCell(self.size)
         cell_bw = rnn.LSTMCell(self.size)
-        outputs, output_states = bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs, sequence_length=[self.max_question_length] * FLAGS.batch_size)
+        q_outputs, q_output_states = bidirectional_dynamic_rnn(cell_fw,
+                                                               cell_bw, 
+                                                               questions,
+                                                               sequence_length=q_mask, 
+                                                               # initial_state_fw=encoder_state_input, 
+                                                               # initial_state_bw=encoder_state_input,
+                                                               time_major=True,
+                                                               dtype=dtypes.float32)
 
-        question_rep = tf.concat(output_states, 0)
-        return
-
-    # TODO
-    def add_placeholders(self):
-        self.question_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_question_length), name="questions")
-        self.question_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_question_length), name="question_masks")
-
-        self.context_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_context_length), name="contexts")
-        self.context_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_context_length), name="context_masks")
-
-        # self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name="dropout")
-    
-    # TODO
-    def create_feed_dict(self, q_inputs_batch=None, q_mask_batch=None, c_inputs_batch=None, c_mask_batch=None, labels_batch=None, dropout=1):
-        feed_dict = {}
-        if q_inputs_batch != None: 
-            feed_dict[self.question_input_placeholder] = q_inputs_batch
-        if q_mask_batch != None: 
-            feed_dict[self.question_masks_placeholder] = q_mask_batch
-        if c_inputs_batch != None: 
-            feed_dict[self.context_input_placeholder] = c_inputs_batch
-        if c_mask_batch != None: 
-            feed_dict[self.context_masks_placeholder] = c_mask_batch
-        if labels_batch != None: 
-            feed_dict[self.labels_placeholder] = labels_batch
-        if dropout != None: 
-            feed_dict[self.dropout_placeholder] = dropout
         
-        return feed_dict
 
+        # question_rep = tf.concat(output_states, 0)
+
+        c_outputs, c_output_states = bidirectional_dynamic_rnn(cell_fw,
+                                                               cell_bw, 
+                                                               contexts,
+                                                               sequence_length=c_mask, 
+                                                               initial_state_fw=q_output_states[0], 
+                                                               initial_state_bw=q_output_states[1],
+                                                               time_major=True,
+                                                               dtype=dtypes.float32)
+        
+        return c_output_states
+
+    # TODO
     
-
+    
+    
 
 class Decoder(object):
     def __init__(self, output_size):
@@ -105,7 +103,22 @@ class Decoder(object):
         :return:
         """
 
-        return
+        dropout_rate = self.dropout_placeholder
+        ### YOUR CODE HERE (~10-20 lines)
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        with tf.variable_scope('decoder') as scope:
+            W = tf.get_variable(name="W", shape=(2*self.state_size, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer)
+            b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
+            U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
+            b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
+
+        h = tf.nn.relu(tf.matmul(x, W) + b1)
+        h_drop = tf.nn.dropout(h, self.dropout_placeholder)
+        pred = tf.matmul(h_drop, U) + b2
+
+        #pred = tf.layers.dense(knowledge_rep, )
+        return pred               
+
 
 class QASystem(object):
     def __init__(self, encoder, decoder, *args):
@@ -118,6 +131,7 @@ class QASystem(object):
         """
 
         # ==== set up placeholder tokens ========
+        self.add_placeholders()
 
 
         # ==== assemble pieces ====
@@ -125,6 +139,10 @@ class QASystem(object):
             self.setup_embeddings(embeddings)
             self.setup_system()
             self.setup_loss()
+
+            optimizer = get_optimizer("adam")
+            self.train_op = optimizer(FLAGS.learning_rate).minimize(loss)
+
 
         # ==== set up training/updating procedure ====
         pass
@@ -137,7 +155,12 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
-        raise NotImplementedError("Connect all parts of your system here!")
+        encoding = encoder.encode((self.question_input_placeholder, self.context_input_placeholder), 
+                                  (self.question_masks_placeholder, self.context_masks_placeholder))
+
+        self.pred_start = decoder.decode(encoding)
+        self.pred_end = decoder.decode(encoding)
+
 
 
     def setup_loss(self):
@@ -146,7 +169,13 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            pass
+            modified_pred_start = self.pred_start + tf.log(tf.one_hot(self.context_masks_placeholder, self.max_context_length))
+            modified_pred_end = self.pred_end + tf.log(tf.one_hot(self.context_masks_placeholder, self.max_context_length))
+
+            start_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(modified_pred_start, self.labels_placeholder[0])
+            end_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(modified_pred_start, self.labels_placeholder[1])
+
+            loss = tf.reduce_mean(start_loss) + tf.reduce_mean(end_loss)
 
     # TODO
     def setup_embeddings(self):
@@ -154,8 +183,46 @@ class QASystem(object):
         Loads distributed word representations based on placeholder tokens
         :return:
         """
-        with vs.variable_scope("embeddings"):
+        # with vs.variable_scope("embeddings"):
+        #     L = tf.Variable(self.pretrained_embeddings, name="L")
+
+        with tf.variable_scope('model') as scope:
             L = tf.Variable(self.pretrained_embeddings, name="L")
+        
+        # print L.get_shape()
+        # print self.input_placeholder.get_shape()
+
+        # embeddings = tf.reshape(tf.nn.embedding_lookup(L, self.input_placeholder), [-1, self.max_length, Config.n_features * Config.embed_size])
+
+    def add_placeholders(self): 
+        self.question_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_question_length), name="questions")
+        self.question_masks_placeholder = tf.placeholder(tf.int32, shape=(), name="question_masks")
+        # self.question_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_question_length), name="question_masks")
+
+        self.context_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.max_context_length), name="contexts")
+        self.context_masks_placeholder = tf.placeholder(tf.int32, shape=(), name="context_masks")
+
+        self.labels_placeholder = tf.placeholder(tf.int32, shape=(None, FLAGS.labels_size), name="labels")
+
+        self.dropout_placeholder = tf.placeholder(tf.float32, shape=(), name="dropout")
+
+    # TODO
+    def create_feed_dict(self, q_inputs_batch=None, q_mask_batch=None, c_inputs_batch=None, c_mask_batch=None, labels_batch=None, dropout=1):
+        feed_dict = {}
+        if q_inputs_batch != None: 
+            feed_dict[self.question_input_placeholder] = q_inputs_batch
+        if q_mask_batch != None: 
+            feed_dict[self.question_masks_placeholder] = q_mask_batch
+        if c_inputs_batch != None: 
+            feed_dict[self.context_input_placeholder] = c_inputs_batch
+        if c_mask_batch != None: 
+            feed_dict[self.context_masks_placeholder] = c_mask_batch
+        if labels_batch != None: 
+            feed_dict[self.labels_placeholder] = labels_batch
+        if dropout != None: 
+            feed_dict[self.dropout_placeholder] = dropout
+        
+        return feed_dict
 
     def optimize(self, session, train_x, train_y):
         """
@@ -167,6 +234,9 @@ class QASystem(object):
 
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
+        input_feed = self.create_feed_dict(inputs_batch, labels_batch=labels_batch)
+        _, loss, grad_norm = sess.run([self.train_op, self.loss, self.grad_norm], feed_dict=feed)
+        return loss, grad_norm
 
         output_feed = []
 
@@ -261,6 +331,17 @@ class QASystem(object):
 
         return f1, em
 
+    def run_epoch(self, sess, train):
+        prog = Progbar(target=1 + int(len(train) / FLAGS.batch_size))
+        losses, grad_norms = [], []
+        for i, batch in enumerate(minibatches(train, self.config.batch_size)):
+            loss, grad_norm = self.train_on_batch(sess, *batch)
+            losses.append(loss)
+            grad_norms.append(grad_norm)
+            prog.update(i + 1, [("train loss", loss)])
+
+        return losses, grad_norms
+
     def train(self, session, dataset, train_dir):
         """
         Implement main training loop
@@ -296,3 +377,11 @@ class QASystem(object):
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
+
+        losses, grad_norms = [], []
+        for epoch in range(FLAGS.epochs):
+            logger.info("Epoch %d out of %d", epoch + 1, FLAGS.epochs)
+            loss, grad_norm = self.run_epoch(session, dataset)
+
+            losses.append(loss)
+            grad_norms.append(grad_norm)

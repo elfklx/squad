@@ -38,6 +38,8 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
 tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
 
+tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
+
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -146,13 +148,14 @@ def main(_):
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
 
-    pretrained_embeddings = np.load(embed_path)['glove']
+    with np.load(embed_path) as data:
+        glove_embeddings = np.asfarray(data["glove"], dtype=np.float32)
     train_data, dev_data = load_and_preprocess_data()
 
     encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, q_len=FLAGS.max_question_length, c_len=FLAGS.max_context_length)
     decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem(encoder, decoder, embeddings=pretrained_embeddings)
+    qa = QASystem(encoder, decoder, embeddings=glove_embeddings)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
