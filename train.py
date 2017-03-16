@@ -39,6 +39,10 @@ tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sent
 tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
 
 tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
+tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
+
+tf.app.flags.DEFINE_string("test_status", "", "Testing status.")
+tf.app.flags.DEFINE_integer("data_limit", 20, "Limit amount of data.")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -86,8 +90,13 @@ def get_normalized_train_dir(train_dir):
 def get_array_from_file(filename):
     all_arrays = []   
     with open(filename) as f:
+        count = 0
         for line in f:
-            all_arrays.append(line.strip().split())
+            all_arrays.append(np.fromstring(line, dtype=int, sep=' '))
+
+            if FLAGS.data_limit > -1 and count >= FLAGS.data_limit:
+                break
+            count += 1
     return all_arrays
 
 def combine_data(questions, contexts, spans):
@@ -102,36 +111,43 @@ def pad_sequences(data, max_length):
     for sentence in data:
         ### YOUR CODE HERE (~4-6 lines)
         sentence_len = len(sentence)
+        sentence = map(int, sentence)
         if sentence_len >= max_length:
-            ret.append((sentence[:max_length], [True] * max_length))
+            ret.append((np.array(sentence[:max_length]), max_length))
         else:
             p_len = max_length - sentence_len
             new_sentence = sentence + [0] * p_len
-            masking = [True] * sentence_len + [False] * p_len
-            ret.append((new_sentence, masking))
+            ret.append((np.array(new_sentence), sentence_len))
+        # if sentence_len >= max_length:
+        #     ret.append((sentence[:max_length], [True] * max_length))
+        # else:
+        #     p_len = max_length - sentence_len
+        #     new_sentence = sentence + [0] * p_len
+        #     masking = [True] * sentence_len + [False] * p_len
+        #     ret.append((new_sentence, masking))
         ### END YOUR CODE ###
     return ret
 
 def load_data(data_type):
     file_prefix = data_type
-    questions = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".ids.question"))
-    contexts = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".ids.context"))
-    spans = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix, + ".span"))
+    questions = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".ids.question" + FLAGS.test_status))
+    contexts = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".ids.context" + FLAGS.test_status))
+    spans = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".span" + FLAGS.test_status))
 
     questions = pad_sequences(questions, FLAGS.max_question_length)
-    contexts = pad_sequences(contexts, FLAGS.max_context_length)
+    contexts = pad_sequences(contexts, FLAGS.max_context_length)    
 
     return {"q": questions, "c": contexts, "s": spans} 
 
 
 def load_and_preprocess_data():
-    logger.info("Loading training data...")
+    logging.info("Loading training data...")
     train_data = load_data('train')
-    logger.info("Done. Read %d sentences", len(train_data['q']))
+    logging.info("Done. Read %d sentences", len(train_data['q']))
 
-    logger.info("Loading dev data...")
-    dev_data = load_data('dev')
-    logger.info("Done. Read %d sentences", len(dev_dat['q']))
+    logging.info("Loading dev data...")
+    dev_data = load_data('val')
+    logging.info("Done. Read %d sentences", len(dev_data['q']))
 
     # now process all the input data.
     
@@ -150,30 +166,33 @@ def main(_):
 
     with np.load(embed_path) as data:
         glove_embeddings = np.asfarray(data["glove"], dtype=np.float32)
-    train_data, dev_data = load_and_preprocess_data()
+        
+        dataset = load_and_preprocess_data()
 
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, q_len=FLAGS.max_question_length, c_len=FLAGS.max_context_length)
-    decoder = Decoder(output_size=FLAGS.output_size)
+        # print(train_data)
 
-    qa = QASystem(encoder, decoder, embeddings=glove_embeddings)
+        encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, config=FLAGS)
+        decoder = Decoder(output_size=FLAGS.output_size, config=FLAGS)
 
-    if not os.path.exists(FLAGS.log_dir):
-        os.makedirs(FLAGS.log_dir)
-    file_handler = logging.FileHandler(pjoin(FLAGS.log_dir, "log.txt"))
-    logging.getLogger().addHandler(file_handler)
+        qa = QASystem(encoder, decoder, embeddings=glove_embeddings, config=FLAGS)
 
-    print(vars(FLAGS))
-    with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
-        json.dump(FLAGS.__flags, fout)
+        if not os.path.exists(FLAGS.log_dir):
+            os.makedirs(FLAGS.log_dir)
+        file_handler = logging.FileHandler(pjoin(FLAGS.log_dir, "log.txt"))
+        logging.getLogger().addHandler(file_handler)
 
-    with tf.Session() as sess:
-        load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
-        initialize_model(sess, qa, load_train_dir)
+        print(vars(FLAGS))
+        with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
+            json.dump(FLAGS.__flags, fout)
 
-        save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-        qa.train(sess, dataset, save_train_dir)
+        with tf.Session() as sess:
+            load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
+            initialize_model(sess, qa, load_train_dir)
 
-        qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+            save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
+            qa.train(sess, dataset, save_train_dir)
+
+            qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
