@@ -19,8 +19,8 @@ logging.basicConfig(level=logging.INFO)
 
 tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_float("dropout", 0.5, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_integer("batch_size", 25, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
@@ -34,6 +34,8 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+tf.app.flags.DEFINE_integer("evaluate", 4000, "Number of evaluation samples.")
+
 
 tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
 tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
@@ -42,13 +44,14 @@ tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
 tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
 
 tf.app.flags.DEFINE_string("test_status", "", "Testing status.")
-tf.app.flags.DEFINE_integer("data_limit", 20, "Limit amount of data.")
+tf.app.flags.DEFINE_integer("data_limit", -1, "Limit amount of data.")
 
 FLAGS = tf.app.flags.FLAGS
 
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
+    # print(ckpt)
     v2_path = ckpt.model_checkpoint_path + ".index" if ckpt else ""
     if ckpt and (tf.gfile.Exists(ckpt.model_checkpoint_path) or tf.gfile.Exists(v2_path)):
         logging.info("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -106,18 +109,22 @@ def combine_data(questions, contexts, spans):
     return combined
 
 def pad_sequences(data, max_length):
-    ret = []
-
+    padded_seqs = []
+    masks = []
+    
     for sentence in data:
         ### YOUR CODE HERE (~4-6 lines)
         sentence_len = len(sentence)
         sentence = map(int, sentence)
         if sentence_len >= max_length:
-            ret.append((np.array(sentence[:max_length]), max_length))
+            padded_seqs.append(np.array(sentence[:max_length]))
+            masks.append(max_length)
         else:
             p_len = max_length - sentence_len
             new_sentence = sentence + [0] * p_len
-            ret.append((np.array(new_sentence), sentence_len))
+            padded_seqs.append(np.array(new_sentence))
+            masks.append(sentence_len)
+            # ret.append((np.array(new_sentence), sentence_len))
         # if sentence_len >= max_length:
         #     ret.append((sentence[:max_length], [True] * max_length))
         # else:
@@ -126,7 +133,7 @@ def pad_sequences(data, max_length):
         #     masking = [True] * sentence_len + [False] * p_len
         #     ret.append((new_sentence, masking))
         ### END YOUR CODE ###
-    return ret
+    return (np.array(padded_seqs), np.array(masks))
 
 def load_data(data_type):
     file_prefix = data_type
@@ -134,8 +141,17 @@ def load_data(data_type):
     contexts = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".ids.context" + FLAGS.test_status))
     spans = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".span" + FLAGS.test_status))
 
-    questions = pad_sequences(questions, FLAGS.max_question_length)
-    contexts = pad_sequences(contexts, FLAGS.max_context_length)    
+    if data_type == 'train':
+        questions = pad_sequences(questions, FLAGS.max_question_length)
+        contexts = pad_sequences(contexts, FLAGS.max_context_length)  
+    else:
+        questions = pad_sequences(questions, max(q.shape[0] for q in questions))
+        contexts = pad_sequences(contexts, max(c.shape[0] for c in contexts))
+
+
+    spans = np.array(spans)
+    if data_type == 'train':
+        spans = np.clip(spans, 0, FLAGS.max_context_length - 1) 
 
     return {"q": questions, "c": contexts, "s": spans} 
 
@@ -174,7 +190,7 @@ def main(_):
         encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, config=FLAGS)
         decoder = Decoder(output_size=FLAGS.output_size, config=FLAGS)
 
-        qa = QASystem(encoder, decoder, embeddings=glove_embeddings, config=FLAGS)
+        qa = QASystem(encoder, decoder, embeddings=glove_embeddings, config=FLAGS, vocab=(vocab, rev_vocab))
 
         if not os.path.exists(FLAGS.log_dir):
             os.makedirs(FLAGS.log_dir)
@@ -192,7 +208,7 @@ def main(_):
             save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
             qa.train(sess, dataset, save_train_dir)
 
-            qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+            qa.evaluate_answer(sess, FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
