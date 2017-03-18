@@ -39,6 +39,12 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
 
+tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
+tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
+
+tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
+tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
+
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
     v2_path = ckpt.model_checkpoint_path + ".index" if ckpt else ""
@@ -49,6 +55,7 @@ def initialize_model(session, model, train_dir):
         logging.info("Created model with fresh parameters.")
         session.run(tf.global_variables_initializer())
         logging.info('Num params: %d' % sum(v.get_shape().num_elements() for v in tf.trainable_variables()))
+    print(model)
     return model
 
 
@@ -109,6 +116,28 @@ def prepare_dev(prefix, dev_filename, vocab):
 
     return context_data, question_data, question_uuid_data
 
+def get_array_from_string_array(string_array):
+    all_arrays = []  
+    for line in string_array:
+        all_arrays.append(np.fromstring(line, dtype=int, sep=' '))
+    return all_arrays
+
+def pad_sequences(data, max_length):
+    padded_seqs = []
+    masks = []
+    
+    for sentence in data:
+        sentence_len = len(sentence)
+        sentence = map(int, sentence)
+        if sentence_len >= max_length:
+            padded_seqs.append(np.array(sentence[:max_length]))
+            masks.append(max_length)
+        else:
+            p_len = max_length - sentence_len
+            new_sentence = sentence + [0] * p_len
+            padded_seqs.append(np.array(new_sentence))
+            masks.append(sentence_len)
+    return (np.array(padded_seqs), np.array(masks))
 
 def generate_answers(sess, model, dataset, rev_vocab):
     """
@@ -130,6 +159,21 @@ def generate_answers(sess, model, dataset, rev_vocab):
     :return:
     """
     answers = {}
+
+    contexts = get_array_from_string_array(dataset[0])
+    questions = get_array_from_string_array(dataset[1])    
+    uuids = dataset[2]
+
+    questions = pad_sequences(questions, FLAGS.max_question_length)
+    contexts = pad_sequences(contexts, FLAGS.max_context_length)  
+
+    predicted_answers = model.answer(sess, (questions[0], questions[1], contexts[0], contexts[1]))
+
+    for i, v in enumerate(predicted_answers):
+        # print(contexts[0][i])
+        s = model.span_to_sentence(v, contexts[0][i])
+        answers[uuids[i]] = model.span_to_sentence(v, contexts[0][i])
+        # print(s)
 
     return answers
 
@@ -161,34 +205,37 @@ def main(_):
     file_handler = logging.FileHandler(pjoin(FLAGS.log_dir, "log.txt"))
     logging.getLogger().addHandler(file_handler)
 
-    print(vars(FLAGS))
-    with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
-        json.dump(FLAGS.__flags, fout)
+    with np.load(embed_path) as data:
+        glove_embeddings = np.asfarray(data["glove"], dtype=np.float32)
+        
+        print(vars(FLAGS))
+        with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
+            json.dump(FLAGS.__flags, fout)
 
-    # ========= Load Dataset =========
-    # You can change this code to load dataset in your own way
+        # ========= Load Dataset =========
+        # You can change this code to load dataset in your own way
 
-    dev_dirname = os.path.dirname(os.path.abspath(FLAGS.dev_path))
-    dev_filename = os.path.basename(FLAGS.dev_path)
-    context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
-    dataset = (context_data, question_data, question_uuid_data)
+        dev_dirname = os.path.dirname(os.path.abspath(FLAGS.dev_path))
+        dev_filename = os.path.basename(FLAGS.dev_path)
+        context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
+        dataset = (context_data, question_data, question_uuid_data)
 
-    # ========= Model-specific =========
-    # You must change the following code to adjust to your model
+        # ========= Model-specific =========
+        # You must change the following code to adjust to your model
 
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    decoder = Decoder(output_size=FLAGS.output_size)
+        encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, config=FLAGS)
+        decoder = Decoder(output_size=FLAGS.output_size, config=FLAGS)
 
-    qa = QASystem(encoder, decoder)
+        qa = QASystem(encoder, decoder, embeddings=glove_embeddings, config=FLAGS, vocab=(vocab, rev_vocab))
 
-    with tf.Session() as sess:
-        train_dir = get_normalized_train_dir(FLAGS.train_dir)
-        initialize_model(sess, qa, train_dir)
-        answers = generate_answers(sess, qa, dataset, rev_vocab)
+        with tf.Session() as sess:
+            train_dir = get_normalized_train_dir(FLAGS.train_dir)
+            initialize_model(sess, qa, train_dir)
+            answers = generate_answers(sess, qa, dataset, rev_vocab)
 
-        # write to json file to root dir
-        with io.open('dev-prediction.json', 'w', encoding='utf-8') as f:
-            f.write(unicode(json.dumps(answers, ensure_ascii=False)))
+            # write to json file to root dir
+            with io.open('dev-prediction.json', 'w', encoding='utf-8') as f:
+                f.write(unicode(json.dumps(answers, ensure_ascii=False)))
 
 
 if __name__ == "__main__":

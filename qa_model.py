@@ -46,7 +46,6 @@ class Encoder(object):
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
         hidden state input into this function.
-
         :param inputs: Symbolic representations of your input
         :param masks: this is to make sure tf.nn.dynamic_rnn doesn't iterate
                       through masked steps
@@ -59,49 +58,51 @@ class Encoder(object):
         questions, contexts = inputs
         q_mask, c_mask = masks
 
-        print(questions)
-        print(contexts)
-        print(q_mask)
-        print(c_mask)
+        # print(questions)
+        # print(contexts)
+        # print(q_mask)
+        # print(c_mask)
 
         with tf.variable_scope('q_decoder') as scope:
-            q_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
-            q_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
-            q_outputs, q_output_states = tf.nn.bidirectional_dynamic_rnn(q_cell_fw,
-                                                                       q_cell_bw, 
-                                                                       questions,
-                                                                       sequence_length=q_mask, 
-                                                                       # initial_state_fw=encoder_state_input, 
-                                                                       # initial_state_bw=encoder_state_input,
-                                                                       swap_memory=True,
-                                                                       time_major=False,
-                                                                       dtype=tf.float32)
-        print(q_output_states[0])
+            # q_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
+            # q_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
+            q_cell_fw = tf.nn.rnn_cell.GRUCell(self.config.state_size)
+            q_outputs, q_output_states = tf.nn.dynamic_rnn(q_cell_fw,
+                                                           # q_cell_bw, 
+                                                           questions,
+                                                           sequence_length=q_mask, 
+                                                           # initial_state_fw=encoder_state_input, 
+                                                           # initial_state_bw=encoder_state_input,
+                                                           # swap_memory=True,
+                                                           # time_major=False,
+                                                           dtype=tf.float32)
+        # print(q_output_states[0])
 
         with tf.variable_scope('p_decoder') as scope:
             # question_rep = tf.concat(output_states, 0)
-            p_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
-            p_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
+            # p_cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
+            # p_cell_bw = tf.nn.rnn_cell.LSTMCell(self.config.state_size, state_is_tuple=True)
 
-            
-            c_outputs, c_output_states = tf.nn.bidirectional_dynamic_rnn(p_cell_fw,
-                                                                       p_cell_bw, 
-                                                                       contexts,
-                                                                       sequence_length=c_mask, 
-                                                                       initial_state_fw=q_output_states[0], 
-                                                                       initial_state_bw=q_output_states[1],
-                                                                       swap_memory=True,
-                                                                       time_major=False,
-                                                                       dtype=tf.float32)
-        # print(c_output_states[0].c)
+            p_cell_fw = tf.nn.rnn_cell.GRUCell(self.config.state_size)
+            c_outputs, c_output_states = tf.nn.dynamic_rnn(p_cell_fw,
+                                                           # p_cell_bw, 
+                                                           contexts,
+                                                           sequence_length=c_mask, 
+                                                           # initial_state=q_output_states[0], 
+                                                           # initial_state_bw=q_output_states[1],
+                                                           # swap_memory=True,
+                                                           # time_major=False,
+                                                           dtype=tf.float32)
+        print('X', c_outputs)
+        print('q', q_output_states)
         #states = tf.unpack(c_output_states[0])
         #print(states)
         #final_rep = tf.concat(0, states)
-        final_rep = tf.concat(1, (c_output_states[0].h, c_output_states[1].h))
-        print(c_output_states[0].h)
-        print(final_rep)
+        # final_rep = tf.concat(1, (c_output_states[0].h, c_output_states[1].h))
+        # print(c_output_states[0].h)
+        # print(final_rep)
         logging.info("Done adding encode definition")
-        return final_rep
+        return (q_output_states, c_outputs)
 
     # TODO
     
@@ -120,7 +121,6 @@ class Decoder(object):
         all paragraph tokens on which token should be
         the start of the answer span, and which should be
         the end of the answer span.
-
         :param knowledge_rep: it is a representation of the paragraph and question,
                               decided by how you choose to implement the encoder
         :return:
@@ -157,7 +157,6 @@ class Decoder(object):
         all paragraph tokens on which token should be
         the start of the answer span, and which should be
         the end of the answer span.
-
         :param knowledge_rep: it is a representation of the paragraph and question,
                               decided by how you choose to implement the encoder
         :return:
@@ -169,19 +168,33 @@ class Decoder(object):
         #     dense = tf.contrib.layers.relu(inputs=knowledge_rep)#, units=1024)#, activation=tf.nn.relu)
         # pred = tf.contrib.layers.dropout(inputs=dense, rate=dropout_rate, training=isTraining)
 
+        q, X = knowledge_rep
+        # print('old', q)
+        # print('old_dim', q.get_shape().as_list())
+        # q_shape = q.get_shape().as_list().append(1)
+        q = tf.expand_dims(q, -1)
+        # print('new', q)
+        # q = tf.reshape(q, )
+
+        combined_rep = tf.reshape(tf.batch_matmul(X, q), [-1, self.config.max_context_length])
+
+        print('Xq', combined_rep)
+
         xavier_initializer = tf.contrib.layers.xavier_initializer()
 
         with tf.variable_scope('decoder_start') as scope:
-            W = tf.get_variable(name="W", shape=(2 * self.config.state_size, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
+            W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
             b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
             U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
             b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-        print(knowledge_rep) #.shape, W.shape, U.shape
+        # print(knowledge_rep) #.shape, W.shape, U.shape
 
-        h = tf.nn.relu(tf.batch_matmul(knowledge_rep, W) + b1)
+        h = tf.nn.relu(tf.matmul(combined_rep, W) + b1)
         h_drop = tf.nn.dropout(h, dropout_rate)
         pred = tf.matmul(h_drop, U) + b2
+
+        # pred = combined_rep
 
         #pred = tf.layers.dense(knowledge_rep, )
         logging.info("Done adding decode definition")
@@ -194,7 +207,6 @@ class Decoder(object):
         all paragraph tokens on which token should be
         the start of the answer span, and which should be
         the end of the answer span.
-
         :param knowledge_rep: it is a representation of the paragraph and question,
                               decided by how you choose to implement the encoder
         :return:
@@ -206,23 +218,37 @@ class Decoder(object):
         #     dense = tf.contrib.layers.relu(inputs=knowledge_rep)#, units=1024)#, activation=tf.nn.relu)
         # pred = tf.contrib.layers.dropout(inputs=dense, rate=dropout_rate, training=isTraining)
 
+        q, X = knowledge_rep
+        # print('old', q)
+        # print('old_dim', q.get_shape().as_list())
+        # q_shape = q.get_shape().as_list().append(1)
+        q = tf.expand_dims(q, -1)
+        # print('new', q)
+        # q = tf.reshape(q, )
+
+        combined_rep = tf.reshape(tf.batch_matmul(X, q), [-1, self.config.max_context_length])
+
+        print('Xq', combined_rep)
+
         xavier_initializer = tf.contrib.layers.xavier_initializer()
 
         with tf.variable_scope('decoder_end') as scope:
-            W = tf.get_variable(name="W", shape=(2 * self.config.state_size, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
+            W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
             b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
             U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
             b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-        print(knowledge_rep) #.shape, W.shape, U.shape
+        # print(knowledge_rep) #.shape, W.shape, U.shape
 
-        h = tf.nn.relu(tf.batch_matmul(knowledge_rep, W) + b1)
+        h = tf.nn.relu(tf.matmul(combined_rep, W) + b1)
         h_drop = tf.nn.dropout(h, dropout_rate)
         pred = tf.matmul(h_drop, U) + b2
 
+        # pred = combined_rep
+
         #pred = tf.layers.dense(knowledge_rep, )
         logging.info("Done adding decode definition")
-        return pred              
+        return pred                
 
 
 class QASystem(object):
@@ -271,7 +297,14 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
-        encoding = self.encoder.encode((self.question_input_placeholder, self.context_input_placeholder), 
+        # print('QUESTIONS', self.question_input_placeholder)
+        # print('Q_W_EMBEDDING', tf.nn.embedding_lookup(self.embeddings, self.question_input_placeholder))
+
+        question_input = tf.nn.embedding_lookup(self.embeddings, self.question_input_placeholder)
+        context_input = tf.nn.embedding_lookup(self.embeddings, self.context_input_placeholder)
+
+
+        encoding = self.encoder.encode((question_input, context_input), 
                                        (self.question_masks_placeholder, self.context_masks_placeholder))
 
         self.pred_start = self.decoder.decode_start(encoding, self.dropout_placeholder, True)
@@ -288,11 +321,11 @@ class QASystem(object):
             # print('SHAPE', self.context_masks_placeholder)
             epsilon = tf.constant(value=0.0000001)
 
-            modified_pred_start = self.pred_start + tf.log(epsilon + tf.one_hot(indices=self.context_masks_placeholder, depth=self.config.max_context_length))
-            modified_pred_end = self.pred_end + tf.log(epsilon + tf.one_hot(indices=self.context_masks_placeholder, depth=self.config.max_context_length))
+            modified_pred_start = self.pred_start + tf.log(epsilon + tf.cast( tf.sequence_mask(lengths=self.context_masks_placeholder, maxlen=self.config.max_context_length), dtype=tf.float32))
+            modified_pred_end = self.pred_end + tf.log(epsilon + tf.cast( tf.sequence_mask(lengths=self.context_masks_placeholder, maxlen=self.config.max_context_length), dtype=tf.float32))
 
             start_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(modified_pred_start, self.labels_placeholder[:,0])
-            end_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(modified_pred_start, self.labels_placeholder[:,1])
+            end_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(modified_pred_end, self.labels_placeholder[:,1])
 
             self.loss = tf.reduce_mean(start_loss) + tf.reduce_mean(end_loss)
 
@@ -306,7 +339,7 @@ class QASystem(object):
         #     L = tf.Variable(self.pretrained_embeddings, name="L")
 
         with tf.variable_scope('model') as scope:
-            L = tf.Variable(self.pretrained_embeddings, name="L")
+            self.embeddings = tf.Variable(self.pretrained_embeddings, name="L")
 
         logging.info("Done adding embeddings")
         
@@ -316,11 +349,11 @@ class QASystem(object):
         # embeddings = tf.reshape(tf.nn.embedding_lookup(L, self.input_placeholder), [-1, self.max_length, Config.n_features * Config.embed_size])
 
     def add_placeholders(self): 
-        self.question_input_placeholder = tf.placeholder(tf.float32, shape=(None, self.config.max_question_length, 1), name="questions")
+        self.question_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.config.max_question_length), name="questions")
         self.question_masks_placeholder = tf.placeholder(tf.int32, shape=(None,), name="question_masks")
         # self.question_masks_placeholder = tf.placeholder(tf.bool, shape=(None, self.max_question_length), name="question_masks")
 
-        self.context_input_placeholder = tf.placeholder(tf.float32, shape=(None, self.config.max_context_length, 1), name="contexts")
+        self.context_input_placeholder = tf.placeholder(tf.int32, shape=(None, self.config.max_context_length), name="contexts")
         self.context_masks_placeholder = tf.placeholder(tf.int32, shape=(None,), name="context_masks")
 
         self.labels_placeholder = tf.placeholder(tf.int32, shape=(None, self.config.label_size), name="labels")
@@ -365,8 +398,8 @@ class QASystem(object):
         # q_inputs_batch, q_mask_batch = zip(*(train_x[0])) 
         # c_inputs_batch, c_mask_batch = zip(*(train_x[1])) 
 
-        c_inputs_batch = c_inputs_batch.reshape(-1, self.config.max_context_length, 1)
-        q_inputs_batch = q_inputs_batch.reshape(-1, self.config.max_question_length, 1)
+        # c_inputs_batch = c_inputs_batch.reshape(-1, self.config.max_context_length, 1)
+        # q_inputs_batch = q_inputs_batch.reshape(-1, self.config.max_question_length, 1)
         # q_mask_batch = np.array(q_mask_batch)
         # c_mask_batch = np.array(c_mask_batch)
 
@@ -430,8 +463,8 @@ class QASystem(object):
 
         # batch_size = q_inputs_batch.shape[0]
         
-        c_inputs_batch = c_inputs_batch.reshape(-1, self.config.max_context_length, 1)
-        q_inputs_batch = q_inputs_batch.reshape(-1, self.config.max_question_length, 1)
+        # c_inputs_batch = c_inputs_batch.reshape(-1, self.config.max_context_length, 1)
+        # q_inputs_batch = q_inputs_batch.reshape(-1, self.config.max_question_length, 1)
         
 
         input_feed = self.create_feed_dict(q_inputs_batch, q_mask_batch, c_inputs_batch, c_mask_batch)
@@ -445,10 +478,13 @@ class QASystem(object):
     def answer(self, session, test_x):
 
         yp, yp2 = self.decode(session, test_x)
-        mask = test_x[1]
-
-        a_s = np.minimum(np.argmax(yp, axis=1), mask - 1)
-        a_e = np.minimum(np.argmax(yp2, axis=1), mask - 1)
+        mask = test_x[3]
+        mask = np.array([ [0] * m + [-1e50] * (self.config.max_context_length - m) for m in mask])
+        # print(mask)
+        yp = yp + mask
+        yp2 = yp2 + mask
+        a_s = np.argmax(yp, axis=1)
+        a_e = np.argmax(yp2, axis=1)
 
         answers = np.array(zip(a_s, a_e))
         answers.sort(axis=1)
@@ -499,34 +535,41 @@ class QASystem(object):
 
         f1 = 0.
         em = 0.
-        test_indices = range(self.test_data['s'].shape[0])
+
+        data = self.test_data
+
+        test_indices = range(data['s'].shape[0])
         test_sample_indices = random_sample(test_indices, sample)
 
-        q_batch = self.get_batch_from_indices(self.test_data['q'][0], test_sample_indices)[:,:self.config.max_question_length]
-        q_mask_batch = np.clip(self.get_batch_from_indices(self.test_data['q'][1], test_sample_indices), 0, self.config.max_question_length - 1)
+        q_batch = self.get_batch_from_indices(data['q'][0], test_sample_indices)[:,:self.config.max_question_length]
+        q_mask_batch = np.clip(self.get_batch_from_indices(data['q'][1], test_sample_indices), 0, self.config.max_question_length - 1)
 
-        c_batch = self.get_batch_from_indices(self.test_data['c'][0], test_sample_indices)[:,:self.config.max_context_length]
-        c_mask_batch = np.clip(self.get_batch_from_indices(self.test_data['c'][1], test_sample_indices), 0, self.config.max_context_length - 1)
+        c_batch = self.get_batch_from_indices(data['c'][0], test_sample_indices)[:,:self.config.max_context_length]
+        c_mask_batch = np.clip(self.get_batch_from_indices(data['c'][1], test_sample_indices), 0, self.config.max_context_length - 1)
 
-        s_batch = self.get_batch_from_indices(self.test_data['s'], test_sample_indices)
+        s_batch = self.get_batch_from_indices(data['s'], test_sample_indices)
 
         predicted_answers = self.answer(session, (q_batch, q_mask_batch, c_batch, c_mask_batch))
         # print(s_batch)
+        groundtruths = [self.test_answers[i] for i in test_sample_indices]
 
 
 
         for i in range(sample):
             # print("*" * 20)
             # print(test_sample_indices[i])
-            context = self.test_data['c'][0][test_sample_indices[i]]
+            # print(test_sample_indices[i])
+            context = data['c'][0][test_sample_indices[i]]
             pred_span = predicted_answers[i]
             actual_span = s_batch[i]
             
-            groundtruth = self.span_to_sentence(actual_span, context)
+            groundtruth = groundtruths[i]
             prediction = self.span_to_sentence(pred_span, context)
 
             # print(prediction)
             # print(groundtruth)
+            # print(context)
+            # print(self.train_answers[test_sample_indices[i]])
 
             f1 += 1.0 * f1_score(prediction, groundtruth) / sample
             em += 1.0 * exact_match_score(prediction, groundtruth) / sample
@@ -591,7 +634,9 @@ class QASystem(object):
 
         return loss, f1, em #losses, grad_norms
 
-    def train(self, session, dataset, train_dir):
+
+
+    def train(self, session, dataset, train_dir, actual_answers):
         """
         Implement main training loop
 
@@ -623,6 +668,10 @@ class QASystem(object):
 
         self.train_data = dataset[0]
         self.test_data = dataset[1]
+
+        self.train_answers = actual_answers[0]
+        self.test_answers = actual_answers[1]
+
         self.saver = tf.train.Saver()
         best_score = 0. 
 

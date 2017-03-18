@@ -34,11 +34,11 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
-tf.app.flags.DEFINE_integer("evaluate", 4000, "Number of evaluation samples.")
+tf.app.flags.DEFINE_integer("evaluate", 4283, "Number of evaluation samples.")
 
 
-tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
-tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
+tf.app.flags.DEFINE_integer("max_question_length", 40, "Maximum length of a sentence.")
+tf.app.flags.DEFINE_integer("max_context_length", 750, "Maximum context paragraph of a sentence.")
 
 tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
 tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
@@ -102,6 +102,18 @@ def get_array_from_file(filename):
             count += 1
     return all_arrays
 
+def get_sentence_from_file(filename):
+    all_arrays = []   
+    with open(filename) as f:
+        count = 0
+        for line in f:
+            all_arrays.append(line.strip())
+
+            if FLAGS.data_limit > -1 and count >= FLAGS.data_limit:
+                break
+            count += 1
+    return all_arrays
+
 def combine_data(questions, contexts, spans):
     combined = []
     for i in range(len(questions)):
@@ -145,8 +157,8 @@ def load_data(data_type):
         questions = pad_sequences(questions, FLAGS.max_question_length)
         contexts = pad_sequences(contexts, FLAGS.max_context_length)  
     else:
-        questions = pad_sequences(questions, max(q.shape[0] for q in questions))
-        contexts = pad_sequences(contexts, max(c.shape[0] for c in contexts))
+        questions = pad_sequences(questions, 60)# max(q.shape[0] for q in questions))
+        contexts = pad_sequences(contexts, 800)#) max(c.shape[0] for c in contexts))
 
 
     spans = np.array(spans)
@@ -184,6 +196,7 @@ def main(_):
         glove_embeddings = np.asfarray(data["glove"], dtype=np.float32)
         
         dataset = load_and_preprocess_data()
+        actual_answers = (get_sentence_from_file(pjoin(FLAGS.data_dir, "train.answer" )), get_sentence_from_file(pjoin(FLAGS.data_dir, "val.answer" )))
 
         # print(train_data)
 
@@ -206,7 +219,7 @@ def main(_):
             initialize_model(sess, qa, load_train_dir)
 
             save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-            qa.train(sess, dataset, save_train_dir)
+            qa.train(sess, dataset, save_train_dir, actual_answers)
 
             qa.evaluate_answer(sess, FLAGS.evaluate, log=True)
 
