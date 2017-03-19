@@ -352,7 +352,7 @@ class QASystem(object):
         words_indices = [context[i] for i in range(span[0], span[1] + 1)]
         return ' '.join([self.rev_vocab[w] for w in words_indices])
 
-    def evaluate_answer(self, session, sample=100, log=False):
+    def evaluate_answer(self, session, sample=100, log=False, dataset=None):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -367,6 +367,8 @@ class QASystem(object):
         :param log: whether we print to std out stream
         :return:
         """
+        if dataset is not None:
+            self.dataset = dataset
 
         f1 = 0.
         em = 0.
@@ -399,7 +401,7 @@ class QASystem(object):
 
                 groundtruths = self.get_batch_from_indices(self.dataset.train_answers, batch_indices)
 
-            # Answer batchp
+            # Answer batch
             predicted_answers = self.answer(session, (q_batch, q_mask_batch, c_batch, c_mask_batch))
 
             # print('HERE', len(predicted_answers))
@@ -410,13 +412,13 @@ class QASystem(object):
                 # print(test_sample_indices[i])
                 context = c_batch[j]
                 pred_span = predicted_answers[j]
-                actual_span = s_batch[j]
+                # actual_span = s_batch[j]
 
                 groundtruth = groundtruths[j]
                 prediction = self.span_to_sentence(pred_span, context)
 
-                # print('Pred:', prediction)
-                # print('True:', groundtruth)
+                print('Pred:', prediction)
+                print('True:', groundtruth)
                 # print(context)
                 # print(self.train_answers[test_sample_indices[i]])
 

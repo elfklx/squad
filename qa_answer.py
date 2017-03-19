@@ -14,6 +14,8 @@ import numpy as np
 from six.moves import xrange
 import tensorflow as tf
 
+from util import Progbar, minibatches
+
 from qa_model import Encoder, QASystem, Decoder
 from preprocessing.squad_preprocess import data_from_json, maybe_download, squad_base_url, \
     invert_map, tokenize, token_idx_map
@@ -26,10 +28,11 @@ logging.basicConfig(level=logging.INFO)
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
+tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 0, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("state_size", 300, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
@@ -39,11 +42,19 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
 
-tf.app.flags.DEFINE_integer("max_question_length", 20, "Maximum length of a sentence.")
-tf.app.flags.DEFINE_integer("max_context_length", 200, "Maximum context paragraph of a sentence.")
+tf.app.flags.DEFINE_integer("evaluate", 5000, "Number of evaluation samples.")
+tf.app.flags.DEFINE_boolean("clip_gradients", True, "Clip gradients?.")
+
+tf.app.flags.DEFINE_integer("max_question_length", 40, "Maximum length of a sentence.")
+tf.app.flags.DEFINE_integer("max_context_length", 750, "Maximum context paragraph of a sentence.")
 
 tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
-tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
+tf.app.flags.DEFINE_integer("hidden_size", 300, "Size of labels.")
+
+tf.app.flags.DEFINE_integer("data_limit", -1, "Limit amount of data.")
+
+tf.app.flags.DEFINE_boolean("load_train_answers", False, "Clip gradients?.")
+tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -55,7 +66,7 @@ def initialize_model(session, model, train_dir):
         logging.info("Created model with fresh parameters.")
         session.run(tf.global_variables_initializer())
         logging.info('Num params: %d' % sum(v.get_shape().num_elements() for v in tf.trainable_variables()))
-    print(model)
+    # print(model)
     return model
 
 
@@ -139,6 +150,38 @@ def pad_sequences(data, max_length):
             masks.append(sentence_len)
     return (np.array(padded_seqs), np.array(masks))
 
+def lines_to_padded_np_array(data, max_length):
+    padded_seqs = []
+    masks = []
+    
+    for sentence in data:
+        # print(sentence)
+        
+        sentence_len = len(sentence)
+        sentence = map(int, sentence)
+        if sentence_len >= max_length:
+            padded_seqs.append(np.array(sentence[:max_length]))
+            masks.append(max_length)
+        else:
+            p_len = max_length - sentence_len
+            new_sentence = sentence + [0] * p_len
+            padded_seqs.append(np.array(new_sentence))
+            masks.append(sentence_len)
+    return {'data': np.array(padded_seqs), 'mask': np.array(masks)}
+
+def get_batch_from_indices(self, data, minibatch_idx):
+        return data[minibatch_idx] if type(data) is np.ndarray else [data[i] for i in minibatch_idx]
+
+def get_minibatches(self, indices, minibatch_size, shuffle=True):
+    data_size = len(indices)
+    if shuffle:
+        np.random.shuffle(indices)
+    batch_indices = []
+    for minibatch_start in np.arange(0, data_size, minibatch_size):
+        batch_indices.append(indices[minibatch_start:minibatch_start + minibatch_size]) 
+    return batch_indices
+
+
 def generate_answers(sess, model, dataset, rev_vocab):
     """
     Loop over the dev or test dataset and generate answer.
@@ -160,20 +203,58 @@ def generate_answers(sess, model, dataset, rev_vocab):
     """
     answers = {}
 
+    # contexts = get_array_from_string_array(dataset[0])
+    # questions = get_array_from_string_array(dataset[1])    
+    # uuids = dataset[2]
+
+    # questions = pad_sequences(questions, FLAGS.max_question_length)
+    # contexts = pad_sequences(contexts, FLAGS.max_context_length)  
+
+    # predicted_answers = model.answer(sess, (questions[0], questions[1], contexts[0], contexts[1]))
+
+    # for i, v in enumerate(predicted_answers):
+    #     # print(contexts[0][i])
+    #     s = model.span_to_sentence(v, contexts[0][i])
+    #     answers[uuids[i]] = model.span_to_sentence(v, contexts[0][i])
+    #     # print(s)
+    # print(dataset[0])
+
     contexts = get_array_from_string_array(dataset[0])
     questions = get_array_from_string_array(dataset[1])    
     uuids = dataset[2]
 
-    questions = pad_sequences(questions, FLAGS.max_question_length)
-    contexts = pad_sequences(contexts, FLAGS.max_context_length)  
+    questions = lines_to_padded_np_array(questions, FLAGS.max_question_length)
+    contexts = lines_to_padded_np_array(contexts, FLAGS.max_context_length)  
 
-    predicted_answers = model.answer(sess, (questions[0], questions[1], contexts[0], contexts[1]))
 
-    for i, v in enumerate(predicted_answers):
-        # print(contexts[0][i])
-        s = model.span_to_sentence(v, contexts[0][i])
-        answers[uuids[i]] = model.span_to_sentence(v, contexts[0][i])
-        # print(s)
+
+    test_indices = range(questions['data'].shape[0])
+    print('Number of questions:', len(test_indices))
+    prog = Progbar(target=1 + int(len(test_indices) / FLAGS.batch_size))
+    for i, batch_indices in enumerate(model.get_minibatches(test_indices, FLAGS.batch_size, shuffle=False)):
+        q_batch = model.get_batch_from_indices(questions['data'], batch_indices)
+        q_mask_batch = model.get_batch_from_indices(questions['mask'], batch_indices)
+
+        c_batch = model.get_batch_from_indices(contexts['data'], batch_indices)
+        c_mask_batch = model.get_batch_from_indices(contexts['mask'], batch_indices)
+
+        uuids_batch = model.get_batch_from_indices(uuids, batch_indices)
+
+        # Answer batchp
+        predicted_answers = model.answer(sess, (q_batch, q_mask_batch, c_batch, c_mask_batch))
+
+        # print('HERE', len(predicted_answers))
+        
+        for j in range(len(batch_indices)):
+            context = c_batch[j]
+            pred_span = predicted_answers[j]
+            
+            answers[uuids_batch[j]] = model.span_to_sentence(pred_span, context)
+        
+        prog.update(i + 1)
+
+    # print(answers)
+    print('Number of answers:', len(answers))
 
     return answers
 

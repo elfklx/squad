@@ -46,6 +46,9 @@ tf.app.flags.DEFINE_integer("data_limit", -1, "Limit amount of data.")
 
 tf.app.flags.DEFINE_boolean("load_train_answers", False, "Clip gradients?.")
 
+tf.app.flags.DEFINE_boolean("run_train", True, "Clip gradients?.")
+
+
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -179,9 +182,11 @@ def main(_):
             initialize_model(sess, qa, load_train_dir)
 
             save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-            qa.train(sess, dataset, save_train_dir)
 
-            qa.evaluate_answer(sess, sample=FLAGS.evaluate, log=True)
+            if FLAGS.run_train:
+                qa.train(sess, dataset, save_train_dir)
+
+            qa.evaluate_answer(sess, sample=FLAGS.evaluate, log=True, dataset=dataset)
 
 if __name__ == "__main__":
     tf.app.run()
