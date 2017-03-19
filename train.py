@@ -6,23 +6,21 @@ import os
 import json
 
 import tensorflow as tf
-
 import numpy as np
 
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 
-
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 0.5, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 25, "Batch size to use during training.")
+tf.app.flags.DEFINE_float("dropout", 1.0, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_integer("batch_size", 30, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("state_size", 300, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -34,24 +32,25 @@ tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per pri
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
-tf.app.flags.DEFINE_integer("evaluate", 4283, "Number of evaluation samples.")
 
+tf.app.flags.DEFINE_integer("evaluate", 5000, "Number of evaluation samples.")
+tf.app.flags.DEFINE_boolean("clip_gradients", True, "Clip gradients?.")
 
 tf.app.flags.DEFINE_integer("max_question_length", 40, "Maximum length of a sentence.")
 tf.app.flags.DEFINE_integer("max_context_length", 750, "Maximum context paragraph of a sentence.")
 
 tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
-tf.app.flags.DEFINE_integer("hidden_size", 200, "Size of labels.")
+tf.app.flags.DEFINE_integer("hidden_size", 300, "Size of labels.")
 
-tf.app.flags.DEFINE_string("test_status", "", "Testing status.")
 tf.app.flags.DEFINE_integer("data_limit", -1, "Limit amount of data.")
+
+tf.app.flags.DEFINE_boolean("load_train_answers", False, "Clip gradients?.")
 
 FLAGS = tf.app.flags.FLAGS
 
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
-    # print(ckpt)
     v2_path = ckpt.model_checkpoint_path + ".index" if ckpt else ""
     if ckpt and (tf.gfile.Exists(ckpt.model_checkpoint_path) or tf.gfile.Exists(v2_path)):
         logging.info("Reading model parameters from %s" % ckpt.model_checkpoint_path)
@@ -90,42 +89,25 @@ def get_normalized_train_dir(train_dir):
     os.symlink(os.path.abspath(train_dir), global_train_dir)
     return global_train_dir
 
-def get_array_from_file(filename):
+def get_lines_from_file(filename, sentence=False):
     all_arrays = []   
     with open(filename) as f:
         count = 0
         for line in f:
-            all_arrays.append(np.fromstring(line, dtype=int, sep=' '))
-
+            if sentence:
+                all_arrays.append(line.strip())
+            else:
+                all_arrays.append(np.fromstring(line, dtype=int, sep=' '))
             if FLAGS.data_limit > -1 and count >= FLAGS.data_limit:
                 break
             count += 1
     return all_arrays
 
-def get_sentence_from_file(filename):
-    all_arrays = []   
-    with open(filename) as f:
-        count = 0
-        for line in f:
-            all_arrays.append(line.strip())
-
-            if FLAGS.data_limit > -1 and count >= FLAGS.data_limit:
-                break
-            count += 1
-    return all_arrays
-
-def combine_data(questions, contexts, spans):
-    combined = []
-    for i in range(len(questions)):
-        combined.append( ((questions[i], contexts[i]), spans[i]) )
-    return combined
-
-def pad_sequences(data, max_length):
+def lines_to_padded_np_array(data, max_length):
     padded_seqs = []
     masks = []
     
     for sentence in data:
-        ### YOUR CODE HERE (~4-6 lines)
         sentence_len = len(sentence)
         sentence = map(int, sentence)
         if sentence_len >= max_length:
@@ -136,57 +118,40 @@ def pad_sequences(data, max_length):
             new_sentence = sentence + [0] * p_len
             padded_seqs.append(np.array(new_sentence))
             masks.append(sentence_len)
-            # ret.append((np.array(new_sentence), sentence_len))
-        # if sentence_len >= max_length:
-        #     ret.append((sentence[:max_length], [True] * max_length))
-        # else:
-        #     p_len = max_length - sentence_len
-        #     new_sentence = sentence + [0] * p_len
-        #     masking = [True] * sentence_len + [False] * p_len
-        #     ret.append((new_sentence, masking))
-        ### END YOUR CODE ###
-    return (np.array(padded_seqs), np.array(masks))
+    return {'data': np.array(padded_seqs), 'mask': np.array(masks)}
 
-def load_data(data_type):
-    file_prefix = data_type
-    questions = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".ids.question" + FLAGS.test_status))
-    contexts = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".ids.context" + FLAGS.test_status))
-    spans = get_array_from_file(pjoin(FLAGS.data_dir, file_prefix + ".span" + FLAGS.test_status))
+class MyData(object):
 
-    if data_type == 'train':
-        questions = pad_sequences(questions, FLAGS.max_question_length)
-        contexts = pad_sequences(contexts, FLAGS.max_context_length)  
-    else:
-        questions = pad_sequences(questions, 60)# max(q.shape[0] for q in questions))
-        contexts = pad_sequences(contexts, 800)#) max(c.shape[0] for c in contexts))
+    def __init__(self):
+        train_q_ids = get_lines_from_file(pjoin(FLAGS.data_dir, "new_train.ids.question"))
+        train_c_ids = get_lines_from_file(pjoin(FLAGS.data_dir, "new_train.ids.context"))
+        train_span = get_lines_from_file(pjoin(FLAGS.data_dir, "new_train.span"))
+
+        # print(train_span)
+        
+        self.train_q_ids = lines_to_padded_np_array(train_q_ids, FLAGS.max_question_length)
+        self.train_c_ids = lines_to_padded_np_array(train_c_ids, FLAGS.max_context_length)
+        self.train_span = np.clip(np.array(train_span), 0, FLAGS.max_context_length - 1) 
+        self.train_answers = None
+        if FLAGS.load_train_answers:
+            self.train_answers = get_lines_from_file(pjoin(FLAGS.data_dir, "new_train.answer"), sentence=True)
 
 
-    spans = np.array(spans)
-    if data_type == 'train':
-        spans = np.clip(spans, 0, FLAGS.max_context_length - 1) 
+        dev_q_ids = get_lines_from_file(pjoin(FLAGS.data_dir, "dev.ids.question"))
+        dev_c_ids = get_lines_from_file(pjoin(FLAGS.data_dir, "dev.ids.context"))
+        dev_span = get_lines_from_file(pjoin(FLAGS.data_dir, "dev.span"))
+        
+        self.dev_q_ids = lines_to_padded_np_array(dev_q_ids, FLAGS.max_question_length)
+        self.dev_c_ids = lines_to_padded_np_array(dev_c_ids, FLAGS.max_context_length)
+        self.dev_span = np.clip(np.array(dev_span), 0, FLAGS.max_context_length - 1) 
+        self.dev_answers = get_lines_from_file(pjoin(FLAGS.data_dir, "dev.answer"), sentence=True)
 
-    return {"q": questions, "c": contexts, "s": spans} 
 
-
-def load_and_preprocess_data():
-    logging.info("Loading training data...")
-    train_data = load_data('train')
-    logging.info("Done. Read %d sentences", len(train_data['q']))
-
-    logging.info("Loading dev data...")
-    dev_data = load_data('val')
-    logging.info("Done. Read %d sentences", len(dev_data['q']))
-
-    # now process all the input data.
-    
-    return train_data, dev_data
 
 def main(_):
 
     # Do what you need to load datasets from FLAGS.data_dir
-    
-
-    dataset = None
+    dataset = MyData()
 
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
@@ -194,11 +159,6 @@ def main(_):
 
     with np.load(embed_path) as data:
         glove_embeddings = np.asfarray(data["glove"], dtype=np.float32)
-        
-        dataset = load_and_preprocess_data()
-        actual_answers = (get_sentence_from_file(pjoin(FLAGS.data_dir, "train.answer" )), get_sentence_from_file(pjoin(FLAGS.data_dir, "val.answer" )))
-
-        # print(train_data)
 
         encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size, config=FLAGS)
         decoder = Decoder(output_size=FLAGS.output_size, config=FLAGS)
@@ -219,9 +179,9 @@ def main(_):
             initialize_model(sess, qa, load_train_dir)
 
             save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-            qa.train(sess, dataset, save_train_dir, actual_answers)
+            qa.train(sess, dataset, save_train_dir)
 
-            qa.evaluate_answer(sess, FLAGS.evaluate, log=True)
+            qa.evaluate_answer(sess, sample=FLAGS.evaluate, log=True)
 
 if __name__ == "__main__":
     tf.app.run()
