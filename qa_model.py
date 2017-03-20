@@ -111,7 +111,7 @@ class Decoder(object):
             # U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
             # b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-            # h = tf.nn.relu(tf.matmul(knowledge_rep, W) + b1)
+            # h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
             # h_drop = tf.nn.dropout(h, dropout_rate)
             # pred = tf.matmul(h_drop, U) + b2
 
@@ -128,7 +128,7 @@ class Decoder(object):
             # U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
             # b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-            # h = tf.nn.relu(tf.matmul(knowledge_rep, W) + b1)
+            # h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
             # h_drop = tf.nn.dropout(h, dropout_rate)
             # pred = tf.matmul(h_drop, U) + b2
 
@@ -305,6 +305,8 @@ class QASystem(object):
         # print(start_pred[0])
         # print(end_pred[0])
 
+
+
         return (start_pred, end_pred)
 
     def answer(self, session, test_x):
@@ -373,14 +375,14 @@ class QASystem(object):
         f1 = 0.
         em = 0.
 
-        useDev = True
+        # useDev = True
 
-        test_indices = range(self.dataset.dev_q_ids['data'].shape[0])
+        test_indices = range(sample)
                 
-        prog = Progbar(target=1 + int(len(test_indices) / self.config.batch_size))
+        prog = Progbar(target=1 + int(len(test_indices) / self.config.answer_batch_size))
         losses, grad_norms = [], []
-        for i, batch_indices in enumerate(self.get_minibatches(test_indices, self.config.batch_size, shuffle=False)):
-            if useDev:      
+        for i, batch_indices in enumerate(self.get_minibatches(test_indices, self.config.answer_batch_size, shuffle=False)):
+            if self.config.useDev:      
                 q_batch = self.get_batch_from_indices(self.dataset.dev_q_ids['data'], batch_indices)
                 q_mask_batch = self.get_batch_from_indices(self.dataset.dev_q_ids['mask'], batch_indices)
 
@@ -417,8 +419,8 @@ class QASystem(object):
                 groundtruth = groundtruths[j]
                 prediction = self.span_to_sentence(pred_span, context)
 
-                print('Pred:', prediction)
-                print('True:', groundtruth)
+                # print('Pred:', prediction)
+                # print('True:', groundtruth)
                 # print(context)
                 # print(self.train_answers[test_sample_indices[i]])
 
