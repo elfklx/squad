@@ -17,14 +17,15 @@ logging.basicConfig(level=logging.INFO)
 
 
 #hyperparameters
-tf.app.flags.DEFINE_float("learning_rate", 0.0008, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
-tf.app.flags.DEFINE_float("dropout", 1, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.8, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("max_question_length", 40, "Maximum length of a sentence.")
 tf.app.flags.DEFINE_integer("max_context_length", 750, "Maximum context paragraph of a sentence.")
 tf.app.flags.DEFINE_integer("state_size", 500, "Size of each model layer.") #300
 tf.app.flags.DEFINE_integer("output_size", 300, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
+tf.app.flags.DEFINE_integer("hidden_size", 500, "Size of hidden states")
 
 #train, eval, test train time - True, True, False, test time - True, False, True
 tf.app.flags.DEFINE_boolean("useDev", True, "If set to true, use Development set for evaluation. Otherwise, use training set")
@@ -46,12 +47,8 @@ tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embeddin
 
 tf.app.flags.DEFINE_integer("evaluate", 4283, "Number of evaluation samples.")
 tf.app.flags.DEFINE_boolean("clip_gradients", True, "Clip gradients?.")
-
 tf.app.flags.DEFINE_integer("label_size", 2, "Size of labels.")
-tf.app.flags.DEFINE_integer("hidden_size", 300, "Size of hidden states")
-
 tf.app.flags.DEFINE_integer("data_limit", -1, "Limit amount of data used for training")
-
 tf.app.flags.DEFINE_boolean("load_train_answers", False, "Are training answers loaded?")
 tf.app.flags.DEFINE_integer("answer_batch_size", 50, "Batch size to use during training.")
 

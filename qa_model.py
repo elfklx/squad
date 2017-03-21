@@ -106,35 +106,35 @@ class Decoder(object):
         xavier_initializer = tf.contrib.layers.xavier_initializer()
 
         with tf.variable_scope('decoder_start') as scope:
-            # W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
-            # b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
-            # U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
-            # b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
+            W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
+            b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
+            U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
+            b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-            # h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
-            # h_drop = tf.nn.dropout(h, dropout_rate)
-            # pred = tf.matmul(h_drop, U) + b2
+            h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
+            h_drop = tf.nn.dropout(h, dropout_rate)
+            pred = tf.matmul(h_drop, U) + b2
 
-            # print("Done adding decode start definition:", pred)
-            # return pred
-            return knowledge_rep  
+            print("Done adding decode start definition:", pred)
+            return pred
+            # return knowledge_rep  
 
     def decode_end(self, knowledge_rep, dropout_rate):
         xavier_initializer = tf.contrib.layers.xavier_initializer()
 
         with tf.variable_scope('decoder_end') as scope:
-            # W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
-            # b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
-            # U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
-            # b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
+            W = tf.get_variable(name="W", shape=(self.config.max_context_length, self.config.hidden_size), dtype=tf.float32, initializer=xavier_initializer) #
+            b1 = tf.Variable(tf.zeros((self.config.hidden_size,)), name="b1")
+            U = tf.get_variable(name="U", shape=(self.config.hidden_size, self.config.max_context_length), dtype=tf.float32, initializer=xavier_initializer)
+            b2 = tf.Variable(tf.zeros((self.config.max_context_length)), name="b2")
         
-            # h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
-            # h_drop = tf.nn.dropout(h, dropout_rate)
-            # pred = tf.matmul(h_drop, U) + b2
+            h = tf.tanh(tf.matmul(knowledge_rep, W) + b1)
+            h_drop = tf.nn.dropout(h, dropout_rate)
+            pred = tf.matmul(h_drop, U) + b2
 
-            # print("Done adding decode end definition:", pred)
-            # return pred
-            return knowledge_rep
+            print("Done adding decode end definition:", pred)
+            return pred
+            # return knowledge_rep
 
 class QASystem(object):
     def __init__(self, encoder, decoder, embeddings, config, vocab, *args):
